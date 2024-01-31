@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime/debug"
@@ -173,9 +174,12 @@ func TestBlockStoreSaveLoadBlock(t *testing.T) {
 		}
 	}
 
-	// save a block
-	block := makeBlock(bs.Height()+1, state, new(types.Commit))
-	validPartSet := block.MakePartSet(2)
+	// save a block big enough to have two block parts
+	txs := []types.Tx{make([]byte, types.BlockPartSizeBytes)} // TX taking one block part alone
+	block, validPartSet := state.MakeBlock(bs.Height()+1, txs, new(types.Commit), nil, state.Validators.GetProposer().Address)
+	require.GreaterOrEqual(t, validPartSet.Total(), uint32(2))
+	part2 := validPartSet.GetPart(1)
+
 	seenCommit := makeTestCommit(10, cmttime.Now())
 	bs.SaveBlock(block, partSet, seenCommit)
 	require.EqualValues(t, 1, bs.Base(), "expecting the new height to be changed")
@@ -415,6 +419,8 @@ func TestLoadBlockPart(t *testing.T) {
 	require.Contains(t, panicErr.Error(), "unmarshal to cmtproto.Part failed")
 
 	// 3. A good block serialized and saved to the DB should be retrievable
+	_, partSet := state.MakeBlock(height, nil, new(types.Commit), nil, state.Validators.GetProposer().Address)
+	part1 := partSet.GetPart(0)
 	pb1, err := part1.ToProto()
 	require.NoError(t, err)
 	err = db.Set(calcBlockPartKey(height, index), mustEncode(pb1))
@@ -422,7 +428,13 @@ func TestLoadBlockPart(t *testing.T) {
 	gotPart, _, panicErr := doFn(loadPart)
 	require.Nil(t, panicErr, "an existent and proper block should not panic")
 	require.Nil(t, res, "a properly saved block should return a proper block")
-	require.Equal(t, gotPart.(*types.Part), part1,
+
+	// Having to do this because of https://github.com/stretchr/testify/issues/1141
+	gotPartJSON, err := json.Marshal(gotPart.(*types.Part))
+	require.NoError(t, err)
+	part1JSON, err := json.Marshal(part1)
+	require.NoError(t, err)
+	require.JSONEq(t, string(gotPartJSON), string(part1JSON),
 		"expecting successful retrieval of previously saved block")
 }
 
@@ -450,7 +462,7 @@ func TestPruneBlocks(t *testing.T) {
 	// make more than 1000 blocks, to test batch deletions
 	for h := int64(1); h <= 1500; h++ {
 		block := makeBlock(h, state, new(types.Commit))
-		partSet := block.MakePartSet(2)
+		partSet := block.MakePartSet(types.BlockPartSizeBytes)
 		seenCommit := makeTestCommit(h, cmttime.Now())
 		bs.SaveBlock(block, partSet, seenCommit)
 	}
@@ -560,7 +572,7 @@ func TestBlockFetchAtHeight(t *testing.T) {
 	require.Equal(t, bs.Height(), int64(0), "initially the height should be zero")
 	block := makeBlock(bs.Height()+1, state, new(types.Commit))
 
-	partSet := block.MakePartSet(2)
+	partSet := block.MakePartSet(types.BlockPartSizeBytes)
 	seenCommit := makeTestCommit(10, cmttime.Now())
 	bs.SaveBlock(block, partSet, seenCommit)
 	require.Equal(t, bs.Height(), block.Header.Height, "expecting the new height to be changed")
