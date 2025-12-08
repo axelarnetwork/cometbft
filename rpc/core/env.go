@@ -174,7 +174,8 @@ func (env *Environment) getHeight(latestHeight int64, heightPtr *int64) (int64, 
 	if heightPtr != nil {
 		height := *heightPtr
 		if height <= 0 {
-			return 0, fmt.Errorf("height must be greater than 0, but got %d", height)
+			// default to latest height
+			return latestHeight, nil
 		}
 		if height > latestHeight {
 			return 0, fmt.Errorf("height %d must be less than or equal to the current blockchain height %d",
